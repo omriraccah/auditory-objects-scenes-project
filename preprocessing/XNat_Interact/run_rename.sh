@@ -8,4 +8,4 @@
 module load miniconda
 conda activate "/gpfs/milgram/project/turk-browne/$2/conda_envs/myenv"
 
-python "/gpfs/milgram/project/turk-browne/$2/multisensory-memory-project/preprocessing/XNat_Interact/rename.py" -sub "$1" -u "$2" -e "$3" -v "$4"
+python "/gpfs/milgram/project/turk-browne/$2/auditory-objects-scenes-project/preprocessing/XNat_Interact/rename.py" -sub "$1" -u "$2" -e "$3" -v "$4"

@@ -13,14 +13,14 @@ echo "running ${sess_ID}"
 
 # set up paths
 export top_dir="/gpfs/milgram/scratch60/turk-browne/$1"
-export dcm_dir=${top_dir}/sandbox/$2/SCANS
-export nii_dir=${top_dir}/sandbox/$2_nii
+export dcm_dir=${top_dir}/sandbox/auditory-object-scenes-data/$2/SCANS
+export nii_dir=${top_dir}/sandbox/auditory-object-scenes-data/$2_nii
 mkdir -p $nii_dir; cd $dcm_dir
 
 # looping through files in the dicom directories and run 
 for k in *
 do
     if [ -d "${k}" ]; then
-        dcm2niix -o $nii_dir -f %i_%t_%f $dcm_dir/$k
+        dcm2niix -o "$nii_dir" -f "${sess_ID}_%t_%f" "$dcm_dir/$k"
     fi
 done

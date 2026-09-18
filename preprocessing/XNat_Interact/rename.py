@@ -12,30 +12,112 @@ def find_files(directory):
 
     # Choose all non '.' files in the directory
     files = [f for f in os.listdir(directory) if f.endswith('.json') or f.endswith('.nii') or f.endswith('.tsv') or f.endswith('.mat')]
-    files = [f for f in files if 'practice' not in f and 'order' not in f]
+    files = [f for f in files if 'practice' not in f and 'order' not in f and 'seq' not in f and 'visual_loc_block' not in f]
 
     # Sort so that we rename nii files first (allows JSON reference with same name)
     files = sorted(files, key=lambda x: (x.endswith('.json'), x))
 
-    for file in files:
-        if verbose:
+    if verbose:
+        for file in files:
             print(file)
 
     return files
 
 
+def matlab_value_to_string(value):
+    """Convert a scalar MATLAB cell/string value to a plain Python string."""
+    while isinstance(value, np.ndarray):
+        if value.size != 1:
+            if value.dtype.kind in {"U", "S"}:
+                return "".join(value.ravel().astype(str))
+            raise ValueError(f"Expected one MATLAB string value, got shape {value.shape}")
+        value = value.reshape(-1)[0]
+
+    return str(value)
+
+
+def classify_visual_stimulus(stimulus_path):
+    """Map a visual stimulus filename to its block-level GLM condition."""
+    stimulus_path = matlab_value_to_string(stimulus_path).strip().replace("\\", "/")
+    path_lower = stimulus_path.lower()
+    filename_upper = stimulus_path.rsplit("/", 1)[-1].upper()
+
+    if "/objects/" in path_lower:
+        return "visual_object"
+    if "/scenes/" in path_lower and filename_upper.startswith("S_"):
+        return "visual_scene"
+    if "/scenes/" in path_lower and filename_upper.startswith("C_"):
+        return "visual_scrambled_scene"
+
+    raise ValueError(f"Could not classify visual stimulus: {stimulus_path}")
+
+
+def visual_block_conditions(stimulus_sequence, number_of_blocks):
+    """Derive one condition per block from the ordered stimulus sequence."""
+    stimulus_sequence = list(stimulus_sequence)
+
+    if number_of_blocks <= 0:
+        raise ValueError("Visual events file does not contain any blocks")
+    if len(stimulus_sequence) % number_of_blocks != 0:
+        raise ValueError(
+            f"Cannot divide {len(stimulus_sequence)} visual stimuli into "
+            f"{number_of_blocks} blocks"
+        )
+
+    stimuli_per_block = len(stimulus_sequence) // number_of_blocks
+    conditions = []
+
+    for block_index in range(number_of_blocks):
+        start = block_index * stimuli_per_block
+        block_stimuli = stimulus_sequence[start:start + stimuli_per_block]
+        block_conditions = {classify_visual_stimulus(value) for value in block_stimuli}
+
+        if len(block_conditions) != 1:
+            raise ValueError(
+                f"Visual block {block_index + 1} contains multiple conditions: "
+                f"{sorted(block_conditions)}"
+            )
+
+        conditions.append(block_conditions.pop())
+
+    return np.asarray(conditions, dtype=object)
+
+
 # Helper function to transform .mat files to TSV files
 def transform_mat_to_tsv(path_to_events_file, directory, execute, verbose):
-    # read data from nested .mat structure
-    events = loadmat(file_name=path_to_events_file)
-    onset = events['data']['Onsets'][0][0]
-    duration = events['data']['Durations'][0][0]
-    stimulus_name = events['data']['trialType'][0][0]
+    print(path_to_events_file)
+    events_name = os.path.basename(path_to_events_file).lower()
+    is_visual = 'visual' in events_name or 'vislocalizer' in events_name
+    is_auditory = 'auditory' in events_name or 'audlocalizer' in events_name
 
+    # read data from nested .mat structure
+    if is_visual:
+        events = loadmat(file_name=path_to_events_file)
+        onset = events['data']['blockOnset'][0][0]
+        duration = events['data']['blockDurations'][0][0]
+        stimulus_sequence = events['data']['stimulus_sequence'][0][0]
+    elif is_auditory:
+        events = loadmat(file_name=path_to_events_file)
+        onset = events['data']['Onsets'][0][0]
+        duration = events['data']['Durations'][0][0]
+        stimulus_name = events['data']['trialType'][0][0]
+    else:
+        raise ValueError("The given file is neither visual nor auditory - not a valid events .mat")
+        
     # convert values to arrays
     onset = np.concatenate(onset).ravel()
     duration = np.concatenate(duration).ravel()
-    stimulus_name = np.concatenate(stimulus_name).ravel()
+    if is_visual:
+        stimulus_sequence = np.concatenate(stimulus_sequence).ravel()
+        stimulus_name = visual_block_conditions(stimulus_sequence, len(onset))
+    else:
+        stimulus_name = np.concatenate(stimulus_name).ravel()
+
+    if not (len(onset) == len(duration) == len(stimulus_name)):
+        raise ValueError(
+            "Events onset, duration, and trial_type arrays do not have matching lengths: "
+            f"{len(onset)}, {len(duration)}, {len(stimulus_name)}"
+        )
 
     # create panda with columns onset duration and stimulus name
     events_panda = pd.DataFrame({'onset': onset, 'duration': duration, 'trial_type': stimulus_name})
@@ -50,13 +132,17 @@ def transform_mat_to_tsv(path_to_events_file, directory, execute, verbose):
 
     return 0
 
-
-def find_json(directory, files, run):
+# Helper function to locate the JSON file corresponding to a TSV events file
+def find_json(directory, files, task, run):
     if run == "0":
         print("This is the practice run")
         x = "practice"
+    elif task == "auditory":
+        x = f"audlocalizer_run-{run}"
+    elif task == "visual":
+        x = f"vislocalizer"
     else:
-        x = f"run-{run}"
+        raise ValueError("Wrong task ID given")
 
     for file in files:
         if file.endswith('.json'):
@@ -64,9 +150,11 @@ def find_json(directory, files, run):
                 json_data = json.load(json_file)
                 if x in json_data['SeriesDescription']:
                     return file
+    raise ValueError(f"Wrong task ID – {task} and run – {run} combination")
     return 0
 
-
+# This function performs the main renaming of the files when given arguments
+# called files and directory, which specify the files to be renamed
 def rename(directory, files, execute, verbose):
     names = []
     # loop over every file to be renamed
@@ -81,9 +169,15 @@ def rename(directory, files, execute, verbose):
         elif filename.endswith('.nii'):
             json_path = os.path.join(directory, f"{filename.split('.')[0]}.json")
         elif filename.endswith('.tsv'):
-            json_path = os.path.join(directory, find_json(directory, files, filename.split("_")[2]))
+            run_id = filename.split("_")[3]
+            run_id = run_id if run_id == "0" else run_id.zfill(2)
+            task_id = filename.split("_")[1]
+            json_path = os.path.join(directory, find_json(directory, files, task_id, run_id))
         elif filename.endswith('.mat'):
-            json_path = os.path.join(directory, find_json(directory, files, filename.split("_")[2]))
+            run_id = filename.split("_")[3]
+            run_id = run_id if run_id == "0" else run_id.zfill(2)
+            task_id = filename.split("_")[1]
+            json_path = os.path.join(directory, find_json(directory, files, task_id, run_id))
 
         with open(json_path, 'r') as json_file:
             json_data = json.load(json_file)
@@ -95,36 +189,42 @@ def rename(directory, files, execute, verbose):
                 acq_time = ""
 
         # These conditionals allow for specific formatting (according to BIDS) for the various scans
-        if 'anat' in code:
+        if 'T1' in code or 'T2' in code:
             # This is an anatomical run
-            new_path = f"sub-{filename.split('_')[0]}_{code}.{filename.split('.')[-1]}"
-        elif 'Scout' in code:
+            sub_id = filename.split('_202')[0]
+            new_path = f"sub-{sub_id}_{code}.{filename.split('.')[-1]}"
+        elif 'scout' in code:
             # This is a scout run
-            new_path = f"sub-{filename.split('_')[0]}_{code}_scout.{filename.split('.')[-1]}"
+            sub_id = filename.split('_202')[0]
+            new_path = f"sub-{sub_id}_{code}_scout.{filename.split('.')[-1]}"
         elif 'epi' in code:
             # This is a fieldmap
-            new_path = f"sub-{filename.split('_')[0]}_{code}.{filename.split('.')[-1]}"
+            sub_id = filename.split('_202')[0]
+            new_path = f"sub-{sub_id}_{code}.{filename.split('.')[-1]}"
         else:
             # This is a functional run or the .csv file for the run or the .mat file for the run (including audio test)
             if filename.endswith('.nii') or filename.endswith('.json'): # the nii data or jsons
-                new_path = f"sub-{filename.split('_')[0]}_{code}_bold{acq_time}.{filename.split('.')[-1]}"
+                sub_id = filename.split('_202')[0]
+                new_path = f"sub-{sub_id}_task-{code}_bold{acq_time}.{filename.split('.')[-1]}"
             elif filename.endswith('.tsv') or filename.endswith('.mat'): # events files
-                new_path = f"sub-{json_path.split('/')[-1].split('_')[0]}_{code}_events{acq_time}.{filename.split('.')[-1]}"
+                sub_id = json_path.split('/')[-1].split('_202')[0]
+                new_path = f"sub-{sub_id}_task-{code}_events{acq_time}.{filename.split('.')[-1]}"
 
         # Conditional to rename/print.
         if execute:
             os.rename(file_path, os.path.join(directory, new_path))
             if verbose: print(f"{filename} renamed to {new_path}")
         else:
-            if verbose: print(new_path)
+            if verbose: print(f"{filename} renamed to {new_path}")
         names.append(new_path)
     print("Names have been assigned")
 
     return names
 
-
-def move(subject_number, niidir, datadir, execute, verbose):
-    subject_id = "sub-mm" + subject_number
+# This function moves all the files to the BIDS directory
+# Any files not in bids go to /bids/sourcedata/sub-[]/other/
+def move(subject_id, niidir, datadir, execute, verbose):
+    subject_id = "sub-" + subject_id
     subject_dir = datadir + "/" + subject_id
     if execute:
         if os.path.exists(datadir):
@@ -133,8 +233,8 @@ def move(subject_number, niidir, datadir, execute, verbose):
             os.makedirs(datadir)
             os.chdir(datadir)
 
-    maps = {'scout': 'other', 'practice': 'other', 'order': 'other', 'audiotest': 'other', 'anat': 'anat',
-            'run': 'func', 'epi': 'fmap'}
+    maps = {'.mat': 'other', 'scout': 'other', 'practice': 'other', 'order': 'other', 'seq': 'other', 'audiotest': 'other', 'T1': 'anat',
+            'T2': 'anat', 'run': 'func', 'bold': 'func', 'epi': 'fmap', 'vislocalizer_events.tsv': 'func'}
 
     for file in os.listdir(niidir):
         for val in maps.keys():
@@ -156,32 +256,36 @@ def move(subject_number, niidir, datadir, execute, verbose):
     return 1
 
 
-def format_json(subject_number, bids_dir, verbose):
+def format_json(subject_id, bids_dir, verbose):
     """
     This function formats JSON files for field map files, functional files, and anatomical files
     Functional: Adds 'TaskName', deletes 'AcquisitionDuration'
     Anatomical: Deletes 'RepetitionTime'
-    Field maps: Adds 'IntendedFor', deletes 'RepetitionTime', fixes j and j-
+    Field maps: Adds 'IntendedFor', deletes 'RepetitionTime'
     """
 
-    path_func = bids_dir + "/sub-mm" + subject_number + "/func"
-    path_anat = bids_dir + "/sub-mm" + subject_number + "/anat"
-    fmap_1 = bids_dir + "/sub-mm" + subject_number + "/fmap/" + "sub-mm" + subject_number + "_dir-AP_epi.json"
-    fmap_2 = bids_dir + "/sub-mm" + subject_number + "/fmap/" + "sub-mm" + subject_number + "_dir-PA_epi.json"
+    path_func = bids_dir + "/sub-" + subject_id + "/func"
+    path_anat = bids_dir + "/sub-" + subject_id + "/anat"
+    fmap_1 = bids_dir + "/sub-" + subject_id + "/fmap/" + "sub-" + subject_id + "_dir-AP_epi.json"
+    fmap_2 = bids_dir + "/sub-" + subject_id + "/fmap/" + "sub-" + subject_id + "_dir-PA_epi.json"
+    fieldmaps_exist = os.path.exists(fmap_1) and os.path.exists(fmap_2)
+
+    if not fieldmaps_exist and verbose:
+        print("Fieldmap JSONs not found; skipping fieldmap formatting")
 
     for file in os.listdir(path_func):
-        if file.endswith(".nii"):
+        if file.endswith(".nii") and fieldmaps_exist:
             # Edit the first fieldmap JSON. Add IntendedFor and delete repetition time
             with open(fmap_1, 'r') as json_file_1:
                 json_data_1 = json.load(json_file_1)
 
             if 'IntendedFor' not in json_data_1: json_data_1['IntendedFor'] = []
-            json_data_1['IntendedFor'].append(f"func/{file}")
+
+            intended = f"func/{file}"
+            if intended not in json_data_1['IntendedFor']:
+                json_data_1['IntendedFor'].append(intended)
 
             if 'RepetitionTime' in json_data_1: del json_data_1['RepetitionTime']
-
-            if 'PA' in json_data_1['SeriesDescription']:
-                json_data_1['PhaseEncodingDirection'] = "j"
 
             with open(fmap_1, 'w') as json_file_1:
                 json.dump(json_data_1, json_file_1)
@@ -191,29 +295,37 @@ def format_json(subject_number, bids_dir, verbose):
                 json_data_2 = json.load(json_file_2)
 
             if 'IntendedFor' not in json_data_2: json_data_2['IntendedFor'] = []
-            json_data_2['IntendedFor'].append(f"func/{file}")
+
+            if intended not in json_data_2['IntendedFor']:
+                json_data_2['IntendedFor'].append(intended)
 
             if 'RepetitionTime' in json_data_2: del json_data_2['RepetitionTime']
-
-            if 'PA' in json_data_2['SeriesDescription']:
-                json_data_2['PhaseEncodingDirection'] = "j"
 
             with open(fmap_2, 'w') as json_file_2:
                 json.dump(json_data_2, json_file_2)
 
             if verbose: print(f"Fieldmap jsons updated for {file}")
         elif file.endswith(".json"):
-            # Edit the function JSON files. Add in TaskName and remove AcquisitionDuration
-            with open(os.path.join(path_func, file), 'r') as func_json:
-                func_data = json.load(func_json)
 
-            func_data['TaskName'] = 'multisensorymemory'
-            if 'AcquisitionDuration' in func_data: del func_data['AcquisitionDuration']
+            # Check if this json is a functional one
+            if 'bold' in file:
+                # Edit the function JSON files. Add in TaskName and remove AcquisitionDuration
+                with open(os.path.join(path_func, file), 'r') as func_json:
+                    func_data = json.load(func_json)
 
-            with open(os.path.join(path_func, file), 'w') as func_json:
-                json.dump(func_data, func_json)
+                # Calculate the right task name
+                task_name = func_data['SeriesDescription'].split('_')[0]
 
-            if verbose: print(f"Fieldmap jsons updated for {file}")
+                # Add in task field
+                func_data['TaskName'] = task_name
+
+                # Delete acq duration
+                if 'AcquisitionDuration' in func_data: del func_data['AcquisitionDuration']
+
+                with open(os.path.join(path_func, file), 'w') as func_json:
+                    json.dump(func_data, func_json)
+
+                if verbose: print(f"Functional jsons updated for {file}")
 
     for file in os.listdir(path_anat):
         # Edit the anatomical data JSON files. Remove repetition time.
@@ -226,14 +338,14 @@ def format_json(subject_number, bids_dir, verbose):
             with open(os.path.join(path_anat, file), 'w') as anat_json:
                 json.dump(anat_data, anat_json)
 
-            print(f"Anatomical JSON edited for {file}")
+            if verbose: print(f"Anatomical JSON edited for {file}")
 
     print("Formatting of JSONs is done")
 
     return 0
 
 
-def format_events(subject_number, bids_dir, descriptions, levels_dict, execute, verbose):
+def format_events(subject_id, bids_dir, descriptions, levels_dict, execute, verbose):
     """
     This function creates the required .json files for each .tsv events file which describe the column headers.
 
@@ -243,11 +355,11 @@ def format_events(subject_number, bids_dir, descriptions, levels_dict, execute, 
     levels_dict: The levels field as a dictionary for the .json file
 
     Output:
-    If execute = True, it will update the SON event files
+    If execute = True, it will update the JSON event files
     Otherwise, it will print out path to JSON files and the data to be sent to them
     """
 
-    path = bids_dir + "/sub-mm" + subject_number + "/func"
+    path = bids_dir + "/sub-" + subject_id + "/func"
 
     for file in os.listdir(path):
         if file.endswith(".tsv"):
@@ -275,24 +387,6 @@ def format_events(subject_number, bids_dir, descriptions, levels_dict, execute, 
     return 0
 
 
-def fix_anat(bids_dir, subject_number, execute, verbose):
-    path = bids_dir + "/sub-mm" + subject_number + "/anat"
-
-    for file in os.listdir(path):
-        if 'T2w' in file:
-            new_file = f"{file.split('_')[0]}_{file.split('_')[1]}.{file.split('.')[-1]}"
-            new_file = new_file.replace("anat-", "")
-            if execute: os.rename(os.path.join(path, file), os.path.join(path, new_file))
-            if verbose: print(f"{file} renamed to {new_file}")
-        elif 'T1w' in file:
-            new_file = file
-            new_file = new_file.replace("anat-", "")
-            if execute: os.rename(os.path.join(path, file), os.path.join(path, new_file))
-            if verbose: print(f"{file} renamed to {new_file}")
-
-    return 0
-
-
 if __name__ == "__main__":
 
     ############ Parse CL args ###############
@@ -303,17 +397,13 @@ if __name__ == "__main__":
     parser.add_argument("-v", "--verbose", type=int, default=1)
 
     args = parser.parse_args()
-    subject_number = args.subject_id
+    subject_id = args.subject_id
     execute = args.execute
     user = args.user
     verbose = args.verbose
 
-    log_file = open(f"/gpfs/milgram/project/turk-browne/{user}/multisensory-memory-project/preprocessing/XNat_Interact/logs/renaming_log_sub-multimem{subject_number}.log", 'w')
-    sys.stdout = log_file
-    sys.stderr = log_file
-
-    directory = f'/gpfs/milgram/scratch60/turk-browne/{user}/sandbox/mm{subject_number}_nii/'
-    bids_dir = f'/gpfs/milgram/scratch60/turk-browne/{user}/sandbox/bids'
+    directory = f'/gpfs/milgram/scratch60/turk-browne/{user}/sandbox/auditory-object-scenes-data/{subject_id}_nii/'
+    bids_dir = f'/gpfs/milgram/scratch60/turk-browne/{user}/sandbox/auditory-object-scenes-data/objects_scenes_bids/'
 
     mat_files = [f for f in os.listdir(directory) if f.endswith('.mat')]
     for mat_file in mat_files:
@@ -321,9 +411,9 @@ if __name__ == "__main__":
 
     files = find_files(directory)
     new_names = rename(directory, files, execute, verbose)
-    move(subject_number, directory, bids_dir, execute, verbose)
+    move(subject_id, directory, bids_dir, execute, verbose)
 
-    if execute: format_json(subject_number, bids_dir, verbose)
+    if execute: format_json(subject_id, bids_dir, verbose)
 
     levels_dict = {'stimulus_name': {'category 1': 'some explanation', 'category 2': 'some explanation'},
                    'event': {'category 1': 'some explanation', 'category 2': 'some explanation'},
@@ -333,11 +423,6 @@ if __name__ == "__main__":
     descriptions = {'onset': 'something', 'duration': 'something', 'tr': 'something', 'stimulus_name': 'something',
                     'event': 'something', 'trial_type': 'something'}
 
-    if execute: format_events(subject_number, bids_dir, descriptions, levels_dict, execute, verbose)
-
-    fix_anat(bids_dir, subject_number, execute, verbose)
+    if execute: format_events(subject_id, bids_dir, descriptions, levels_dict, execute, verbose)
 
     print("Completed renaming and moving to BIDS directory")
-
-
-

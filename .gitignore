@@ -1,5 +1,11 @@
 raw_data/
 .ipynb_checkpoints/
+**/.ipynb_checkpoints/
+logs/
+**/logs/
+results/
+**/results/
 preprocessing/ASHS/logs/
 preprocessing/XNat_Interact/logs/
 preprocessing/XNat_Interact/renaming_log_*.log
+__pycache__
