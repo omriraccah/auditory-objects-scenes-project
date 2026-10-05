@@ -11,7 +11,7 @@ module load XNATClientTools
 
 sess_ID=$2
 password=$PWD
-OUTDIR="/gpfs/milgram/scratch60/turk-browne/$1/sandbox/auditory-object-scenes-data/"
+OUTDIR="/gpfs/milgram/scratch60/turk-browne/$1/sandbox_av/"
 xnat_user=$USER_ID
 
 cd $OUTDIR

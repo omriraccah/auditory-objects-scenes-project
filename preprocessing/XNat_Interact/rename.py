@@ -402,8 +402,8 @@ if __name__ == "__main__":
     user = args.user
     verbose = args.verbose
 
-    directory = f'/gpfs/milgram/scratch60/turk-browne/{user}/sandbox/auditory-object-scenes-data/{subject_id}_nii/'
-    bids_dir = f'/gpfs/milgram/scratch60/turk-browne/{user}/sandbox/auditory-object-scenes-data/objects_scenes_bids/'
+    directory = f'/gpfs/milgram/scratch60/turk-browne/{user}/sandbox_av/{subject_id}_nii/'
+    bids_dir = f'/gpfs/milgram/scratch60/turk-browne/{user}/sandbox_av/objects_scenes_bids/'
 
     mat_files = [f for f in os.listdir(directory) if f.endswith('.mat')]
     for mat_file in mat_files:

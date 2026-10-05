@@ -69,11 +69,11 @@ echo
 
 "${FMRIPREP_CMD[@]}"
 
-PREPROC="/gpfs/milgram/scratch60/turk-browne/$2/sandbox/auditory-object-scenes-data/preprocessed"
+PREPROC="/gpfs/milgram/scratch60/turk-browne/$2/sandbox_va/preprocessed"
 if [ ! -d $PREPROC ]; then
         mkdir $PREPROC
 fi
 
-cp -r /gpfs/milgram/scratch60/turk-browne/$2/sandbox/auditory-object-scenes-data/objects_scenes_bids/derivatives/sub-$1* /gpfs/milgram/scratch60/turk-browne/$2/sandbox/auditory-object-scenes-data/preprocessed/
+cp -r /gpfs/milgram/scratch60/turk-browne/$2/sandbox_va/objects_scenes_bids/derivatives/sub-$1* /gpfs/milgram/scratch60/turk-browne/$2/sandbox_va/preprocessed/
 
-cp /gpfs/milgram/scratch60/turk-browne/$2/sandbox/auditory-object-scenes-data/objects_scenes_bids/sub-$1/func/*.tsv /gpfs/milgram/scratch60/turk-browne/$2/sandbox/auditory-object-scenes-data/preprocessed/sub-$1/func/
+cp /gpfs/milgram/scratch60/turk-browne/$2/sandbox_va/objects_scenes_bids/sub-$1/func/*.tsv /gpfs/milgram/scratch60/turk-browne/$2/sandbox_va/preprocessed/sub-$1/func/

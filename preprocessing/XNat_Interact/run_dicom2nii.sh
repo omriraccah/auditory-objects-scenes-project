@@ -13,8 +13,8 @@ echo "running ${sess_ID}"
 
 # set up paths
 export top_dir="/gpfs/milgram/scratch60/turk-browne/$1"
-export dcm_dir=${top_dir}/sandbox/auditory-object-scenes-data/$2/SCANS
-export nii_dir=${top_dir}/sandbox/auditory-object-scenes-data/$2_nii
+export dcm_dir=${top_dir}/sandbox_av/$2/SCANS
+export nii_dir=${top_dir}/sandbox_av/$2_nii
 mkdir -p $nii_dir; cd $dcm_dir
 
 # looping through files in the dicom directories and run 
